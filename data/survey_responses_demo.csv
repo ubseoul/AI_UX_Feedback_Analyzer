@@ -1,0 +1,6 @@
+user_id,timestamp,nps,sus,feature_used,churned,comment
+u001,2025-09-10,9,82,stories,0,"Love the simplicity, but onboarding was confusing."
+u002,2025-09-12,4,55,editor,1,Editor crashes on large files. I switched tools.
+u003,2025-09-13,7,68,export,0,Export is slow; team loves collaboration though.
+u004,2025-09-15,2,40,stories,1,Couldn’t find settings; navigation feels messy.
+u005,2025-09-17,8,75,editor,0,Great docs; dark mode saved my eyes.

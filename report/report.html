@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Predictive UX Feedback Report</title>
+<style>
+  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;line-height:1.5}
+  .wrap{max-width:1100px;margin:0 auto}
+  h1{font-size:28px;margin-bottom:4px} h2{margin-top:28px}
+  .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid #ddd}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{border:1px solid #eee;border-radius:12px;padding:16px}
+  table{width:100%;border-collapse:collapse}
+  th,td{border:1px solid #eee;padding:8px;text-align:left}
+  .small{color:#666;font-size:12px}
+  img{max-width:100%;height:auto;border:1px solid #eee;border-radius:8px}
+  ol li{margin-bottom:8px}
+</style>
+</head><body><div class="wrap">
+<h1>Predictive UX Feedback Report</h1>
+<div class="small">Generated 2025-10-20 22:02 UTC</div>
+<p><span class="badge">MVP • Directional Insights</span></p>
+<div style="background:#fff7cc;border:1px solid #eedc82;padding:8px;border-radius:8px;margin:10px 0;">Directional insights only — sample size below 200.</div>
+<div class="grid">
+  <div class="card">
+    <h2>Overall Model</h2>
+    <p><strong>AUC</strong>: 1.000<br/>
+    <span class="small">Classification report/notes:</span></p>
+    <pre class="small">              precision    recall  f1-score   support
+
+           0       1.00      1.00      1.00         1
+           1       1.00      1.00      1.00         1
+
+    accuracy                           1.00         2
+   macro avg       1.00      1.00      1.00         2
+weighted avg       1.00      1.00      1.00         2
+</pre>
+    <p class="small">Model: Regularized logistic regression on TF-IDF(text) + SUS/NPS + feature segments.</p>
+  </div>
+  <div class="card">
+    <h2>Dataset &amp; Guardrails</h2>
+    <p><strong>Rows</strong>: 5 | <strong>Churn=1</strong>: 2 | <strong>Segments</strong>: 3</p>
+    <ul class="small">
+      <li>Privacy: emails/URLs/phones masked in comments; nothing stored unless you download.</li>
+      <li>Directional until larger sample or stratified experiments are run.</li>
+      <li>Deterministic seed for reproducibility (42).</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Next 3 Bets</h2>
+<ol><li><strong>Improve stories onboarding & discoverability</strong> — 2 users; highest predicted churn risk segment (0.48). <em>(Predicted impact: High (directional))</em></li><li><strong>Address recurring text themes</strong> — Top keywords from comments highlight core frustrations to target. <em>(Predicted impact: Medium–High (directional))</em></li><li><strong>Close benchmark gaps (SUS/NPS)</strong> — Average NPS/SUS by feature shows where polish will have outsized impact. <em>(Predicted impact: Medium (directional))</em></li></ol>
+
+<h2>Risk by Segment</h2>
+<p class="small">Avg predicted risk (0–1) per segment; higher = riskier. Includes avg NPS/SUS per feature.</p>
+<img src="assets/segment_risk.png" alt="Segment risk chart"/>
+
+<h2>Top Risk Signals (Model)</h2>
+<p class="small">Words/flags most associated with higher churn risk (model weights).</p>
+<img src="assets/top_features.png" alt="Top features chart"/>
+
+<h2>Top Frustration Keywords (TF‑IDF)</h2>
+<p class="small">Frequent, distinctive tokens among churn‑labeled comments.</p>
+<img src="assets/top_keywords.png" alt="Top keywords chart"/>
+
+<h2>Representative Quotes (High-Risk Users)</h2>
+<ul><li><strong>u004</strong> (stories) — risk 0.81: “Couldn’t find settings; navigation feels messy.”</li><li><strong>u002</strong> (editor) — risk 0.53: “Editor crashes on large files. I switched tools.”</li><li><strong>u003</strong> (export) — risk 0.23: “Export is slow; team loves collaboration though.”</li><li><strong>u005</strong> (editor) — risk 0.21: “Great docs; dark mode saved my eyes.”</li><li><strong>u001</strong> (stories) — risk 0.16: “Love the simplicity, but onboarding was confusing.”</li></ul>
+
+<p class="small">© MVP — For portfolio/demo. Treat as directional until sample ≥ 500 rows.</p>
+</div></body></html>

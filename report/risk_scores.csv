@@ -1,0 +1,6 @@
+user_id,feature_used,_risk,comment
+u004,stories,0.8075987448380243,Couldn’t find settings; navigation feels messy.
+u002,editor,0.5272095755925065,Editor crashes on large files. I switched tools.
+u003,export,0.22655447030469208,Export is slow; team loves collaboration though.
+u005,editor,0.21325859921582493,Great docs; dark mode saved my eyes.
+u001,stories,0.15823810966479468,"Love the simplicity, but onboarding was confusing."
