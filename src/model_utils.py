@@ -170,10 +170,22 @@ def save_chart_top_feats(top_features, path: str) -> str:
 # -----------------------------
 # Core model pipeline
 # -----------------------------
-def _build_pipeline():
+def _build_pipeline(min_df: int = 1, ngram_range=(1, 2)):
+    """
+    Build a pipeline. Defaults are forgiving for tiny datasets:
+    - min_df=1 (allow singletons)
+    - ngram_range=(1,2) (unigrams+bigrams)
+    """
     preprocess = ColumnTransformer(
         transformers=[
-            ("text", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2), "comment"),
+            ("text", TfidfVectorizer(
+                max_features=5000,
+                ngram_range=ngram_range,
+                min_df=min_df,
+                lowercase=True,
+                strip_accents="unicode",
+                token_pattern=r"(?u)\b\w+\b"  # keep short words/numbers
+            ), "comment"),
             ("seg", OneHotEncoder(handle_unknown="ignore"), ["feature_used"]),
             ("num", "passthrough", ["nps", "sus"]),
         ],
@@ -187,6 +199,7 @@ def _build_pipeline():
         random_state=42,
     )
     return preprocess, model
+
 
 def _get_feature_names(preprocess: ColumnTransformer) -> List[str]:
     try:
