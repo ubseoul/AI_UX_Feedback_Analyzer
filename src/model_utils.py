@@ -14,12 +14,11 @@ from sklearn.metrics import roc_auc_score, classification_report
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.preprocessing import OneHotEncoder
 
-# ---- Public schema constant ----
+# Public schema constant
 REQUIRED_COLS = [
     "user_id", "timestamp", "nps", "sus", "feature_used", "churned", "comment"
 ]
 
-# ---- Exported names ----
 __all__ = [
     "REQUIRED_COLS",
     "quality_checks",
@@ -28,12 +27,12 @@ __all__ = [
     "save_chart",
     "save_chart_segment",
     "save_chart_top_features",
-    "save_chart_top_feats",   # alias for backward-compat
+    "save_chart_top_feats",   # alias
     "render_html",
     "export_risk_scores",
-    "save_segment_chart",     # legacy alias
-    "save_top_features_chart",# legacy alias
-    "export_scores",          # legacy alias
+    "save_segment_chart",     # alias
+    "save_top_features_chart",# alias
+    "export_scores",          # alias
 ]
 
 # -----------------------------
@@ -66,12 +65,6 @@ def quality_checks(df: pd.DataFrame) -> List[str]:
 # Cleaning & coercion
 # -----------------------------
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalize incoming dataframe:
-    - create missing columns with sensible defaults
-    - coerce types/ranges
-    - avoid calling .fillna on plain strings
-    """
     df = df.copy()
 
     # feature_used
@@ -100,7 +93,7 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
         df["sus"] = 70
     df["sus"] = pd.to_numeric(df["sus"], errors="coerce").fillna(70).clip(0, 100).astype(int)
 
-    # churned (0/1) with inference if missing
+    # churned (0/1) or inferred
     if "churned" in df.columns:
         raw = df["churned"].astype(str).str.strip().str.lower()
         df["churned"] = np.where(
@@ -130,7 +123,7 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # -----------------------------
-# Plot saving helper
+# Plot saving helpers
 # -----------------------------
 def save_chart(fig: plt.Figure, path: str) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -140,7 +133,6 @@ def save_chart(fig: plt.Figure, path: str) -> str:
     return path
 
 def save_chart_segment(seg_series: pd.Series, path: str) -> str:
-    """Create and save the 'risk by segment' horizontal bar chart."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(seg_series) + 2))))
     seg_series.sort_values(ascending=True).plot(kind="barh")
@@ -150,7 +142,6 @@ def save_chart_segment(seg_series: pd.Series, path: str) -> str:
     return save_chart(fig, path)
 
 def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) -> str:
-    """Create and save the 'top risk signals' horizontal bar chart."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not top_features:
         top_features = [("No strong positive signals", 0.0)]
@@ -164,7 +155,7 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) ->
     plt.gca().invert_yaxis()
     return save_chart(fig, path)
 
-# Backward-compat alias (some app.py versions import this)
+# Back-compat alias used by some app.py versions
 def save_chart_top_feats(top_features, path: str) -> str:
     return save_chart_top_features(top_features, path)
 
@@ -172,11 +163,6 @@ def save_chart_top_feats(top_features, path: str) -> str:
 # Core model pipeline
 # -----------------------------
 def _build_pipeline(min_df: int = 1, ngram_range=(1, 2)):
-    """
-    Build a pipeline. Defaults are forgiving for tiny datasets:
-    - min_df=1 (allow singletons)
-    - ngram_range=(1,2) (unigrams+bigrams)
-    """
     preprocess = ColumnTransformer(
         transformers=[
             ("text", TfidfVectorizer(
@@ -309,7 +295,6 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     except Exception:
         coefs = np.zeros((1, len(feat_names)))
 
-    # If text was dropped, don't pretend we have meaningful word weights
     top_feats = _top_positive_features(coefs, feat_names, k=15) if using_text else []
     top_keywords = [name for name, _w in top_feats]
 
@@ -317,22 +302,22 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
     top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
-     return {
+    return {
         "auc": auc,
         "report": report_txt,
 
         # dataframes
         "df_scored": df_scored,
-        "df": df_scored,                 # <-- alias for older app.py
+        "df": df_scored,                 # alias for legacy app.py
 
         # charts
         "seg_chart_path": seg_chart_path,
         "top_feats_chart_path": top_feats_chart_path,
 
         # features / segments
-        "top_features": top_feats,       # [(keyword, weight), ...]
+        "top_features": top_feats,
         "top_feats": top_feats,          # alias
-        "top_keywords": top_keywords,    # ["keyword", ...]
+        "top_keywords": top_keywords,
         "seg_series": seg_series,
         "seg": seg_series,               # alias
     }
@@ -450,19 +435,12 @@ def render_html(
 # CSV export of scores
 # -----------------------------
 def export_risk_scores(df_scored: pd.DataFrame, out_path: str = "report/risk_scores.csv") -> str:
-    """
-    Export a compact CSV with user_id, feature_used, nps, sus, comment, churned, predicted_risk.
-    Returns the path written. Creates folders if needed.
-    """
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
     want_cols = ["user_id", "feature_used", "nps", "sus", "comment", "churned", "predicted_risk"]
     cols = [c for c in want_cols if c in df_scored.columns]
-
     out = df_scored[cols].copy()
     if "predicted_risk" in out.columns:
         out = out.sort_values("predicted_risk", ascending=False)
-
     out.to_csv(out_path, index=False, encoding="utf-8")
     return out_path
 
