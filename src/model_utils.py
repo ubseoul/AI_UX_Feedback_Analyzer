@@ -217,18 +217,53 @@ def _top_positive_features(coef: np.ndarray, feat_names: List[str], k: int = 15)
 def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     """
     Train LR on TF-IDF(text)+one-hot(segment)+numeric(NPS,SUS).
+    Robust to tiny/empty-text datasets:
+      1) Try TF-IDF (uni+bi, min_df=1)
+      2) Fallback: TF-IDF (uni only, min_df=1)
+      3) Final fallback: drop text; use only segment + NPS + SUS
     Returns dict with AUC, classification report (if no CV), scored df,
-    top features, segment series, and chart paths.
+    top features (empty if text dropped), segment series, and chart paths.
     """
     df = clean_df(df)
 
-    X_cols = ["comment", "feature_used", "nps", "sus"]
+    # Target
     y = df["churned"].astype(int).values
 
-    preprocess, model = _build_pipeline()
-    X_proc = preprocess.fit_transform(df[X_cols])
+    # Start with full feature set
+    X_cols = ["comment", "feature_used", "nps", "sus"]
+    using_text = True
 
-    # AUC via CV or in-sample fallback
+    # 1) Build forgiving pipeline and try fit
+    preprocess, model = _build_pipeline(min_df=1, ngram_range=(1, 2))
+    try:
+        X_proc = preprocess.fit_transform(df[X_cols])
+    except ValueError:
+        # 2) Try simpler unigrams only
+        try:
+            preprocess, model = _build_pipeline(min_df=1, ngram_range=(1, 1))
+            X_proc = preprocess.fit_transform(df[X_cols])
+        except ValueError:
+            # 3) Final fallback: drop text entirely
+            using_text = False
+            X_cols = ["feature_used", "nps", "sus"]
+            preprocess = ColumnTransformer(
+                transformers=[
+                    ("seg", OneHotEncoder(handle_unknown="ignore"), ["feature_used"]),
+                    ("num", "passthrough", ["nps", "sus"]),
+                ],
+                remainder="drop",
+                verbose_feature_names_out=False,
+            )
+            # fresh model for consistency
+            model = LogisticRegression(
+                solver="liblinear",
+                class_weight="balanced",
+                max_iter=200,
+                random_state=42,
+            )
+            X_proc = preprocess.fit_transform(df[X_cols])
+
+    # --- AUC via CV or in-sample fallback ---
     auc: Any = None
     report_txt = "CV used — classification report not computed per fold."
     if len(np.unique(y)) >= 2:
@@ -240,6 +275,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
             except Exception:
                 auc = None
         else:
+            # train once and compute in-sample metrics (directional)
             model.fit(X_proc, y)
             p = model.predict_proba(X_proc)[:, 1]
             try:
@@ -252,32 +288,34 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # Ensure fitted for downstream ops
+    # Ensure fitted for downstream scoring if CV path taken
     if not hasattr(model, "classes_"):
         model.fit(X_proc, y)
 
-    # Score full dataset
+    # --- Score full dataset ---
     probs = model.predict_proba(X_proc)[:, 1]
     df_scored = df.copy()
     df_scored["predicted_risk"] = probs
 
-    # Segment series for chart
+    # --- Segment series for chart ---
     seg_series = (
         df_scored.groupby("feature_used", dropna=False)["predicted_risk"]
         .mean()
         .sort_values(ascending=True)
     )
 
-    # Top features from coefficients
+    # --- Top features from coefficients ---
     feat_names = _get_feature_names(preprocess)
     try:
         model.fit(X_proc, y)
         coefs = model.coef_
     except Exception:
         coefs = np.zeros((1, len(feat_names)))
-    top_feats = _top_positive_features(coefs, feat_names, k=15)
 
-    # Save charts
+    # If text was dropped, don't pretend we have meaningful word weights
+    top_feats = _top_positive_features(coefs, feat_names, k=15) if using_text else []
+
+    # --- Save charts ---
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
     top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
@@ -290,6 +328,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         "top_features": top_feats,
         "seg_series": seg_series,
     }
+
 
 # -----------------------------
 # HTML report writer
