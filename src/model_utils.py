@@ -30,7 +30,8 @@ __all__ = [
     "save_chart",
     "save_chart_segment",
     "save_chart_top_features",
-    "save_chart_top_feats",       # alias with kwargs support
+    "save_chart_top_feats",       # alias accepting kwargs
+    "save_chart_top_keywords",
     "render_html",
     "export_risk_scores",
     "save_segment_chart",         # alias
@@ -168,13 +169,27 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str, *,
     return save_chart(fig, path)
 
 
-# Back-compat alias used by some app.py versions — now accepts kwargs
 def save_chart_top_feats(top_features, path: str, **kwargs) -> str:
-    """
-    Wrapper to maintain compatibility with app.py calls like:
-      save_chart_top_feats(top_feats, feats_chart_path, title="...", xlabel="...")
-    """
+    """Back-compat wrapper that accepts kwargs like title/xlabel."""
     return save_chart_top_features(top_features, path, **kwargs)
+
+
+def save_chart_top_keywords(top_keywords: List[Tuple[str, float]], path: str, *,
+                            title: str = "Top keywords by weight",
+                            xlabel: str = "Weight") -> str:
+    """Bar chart of (token, weight) tuples."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not top_keywords:
+        top_keywords = [("no_keywords_available", 0.0)]
+    names, weights = zip(*top_keywords)
+    y_pos = np.arange(len(names))
+    fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(names) + 2))))
+    plt.barh(y_pos, weights)
+    plt.yticks(y_pos, names)
+    plt.xlabel(xlabel)
+    plt.title(title)
+    plt.gca().invert_yaxis()
+    return save_chart(fig, path)
 
 
 # -----------------------------
@@ -210,6 +225,7 @@ def _get_feature_names(preprocess: ColumnTransformer) -> List[str]:
     try:
         return preprocess.get_feature_names_out().tolist()
     except Exception:
+        # Fallback generic names
         return [f"f{i}" for i in range(1, 5001)] + ["seg_*", "nps", "sus"]
 
 
@@ -321,13 +337,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     top_keywords: List[Tuple[str, float]] = list(top_feats) if top_feats else [("no_keywords_available", 0.0)]
     top_keyword_strings: List[str] = [name for name, _w in top_feats] if top_feats else ["no_keywords_available"]
 
-    # Save charts
-    seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
-    top_feats_chart_path = save_chart_top_features(
-        top_feats, "charts/top_features.png",
-        title="Top Risk Signals", xlabel="Coefficient (higher = more churn risk)"
-    )
-
+    # Save charts outside (app.py), but return data & also default chart paths if needed
     return {
         "auc": auc,
         "report": report_txt,
@@ -335,10 +345,6 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         # dataframes
         "df_scored": df_scored,
         "df": df_scored,                 # alias for legacy app.py
-
-        # charts
-        "seg_chart_path": seg_chart_path,
-        "top_feats_chart_path": top_feats_chart_path,
 
         # features / segments
         "top_features": top_feats,
@@ -359,14 +365,22 @@ def render_html(
     auc: Any,
     report: str,
     top_features: List[Tuple[str, float]],
+    top_keywords: List[Tuple[str, float]],
     seg_chart_path: str,
     top_feats_chart_path: str,
+    kw_chart_path: str,
     out_path: str = "report/report.html",
 ) -> str:
+    """
+    Matches app.py call:
+      render_html(df_scored, seg, auc, report, top_feats, top_keywords,
+                  seg_chart_path, feats_chart_path, kw_chart_path, out_html)
+    """
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     seg_img = os.path.relpath(seg_chart_path, os.path.dirname(out_path)).replace("\\", "/")
     feat_img = os.path.relpath(top_feats_chart_path, os.path.dirname(out_path)).replace("\\", "/")
+    kw_img = os.path.relpath(kw_chart_path, os.path.dirname(out_path)).replace("\\", "/")
 
     # Top quotes for high-risk users
     sample_quotes: List[str] = []
@@ -381,6 +395,7 @@ def render_html(
         sample_quotes.append(f'{uid} ({seg}) — risk {risk:.2f}: “{text}”')
 
     tf_block = "\n".join([f"- {n}: {w:.3f}" for n, w in top_features[:12]]) if top_features else "- No text-based signals available."
+    kw_block = "\n".join([f"- {n}: {w:.3f}" for n, w in top_keywords[:12]]) if top_keywords else "- No keywords available."
     seg_tbl = "\n".join([f"<tr><td>{k}</td><td>{v:.3f}</td></tr>" for k, v in seg_series.items()])
 
     auc_text = "N/A"
@@ -438,10 +453,17 @@ def render_html(
   </div>
 
   <div class="card">
-    <h2>Top risk signals</h2>
+    <h2>Top risk signals (coefficients)</h2>
     <p>Words/flags most associated with higher churn risk (model weights).</p>
     <img src="{feat_img}" alt="Top features chart"/>
     <pre>{tf_block}</pre>
+  </div>
+
+  <div class="card">
+    <h2>Top keywords (TF-IDF)</h2>
+    <p>Highest-weighted tokens in your corpus after TF-IDF (sanity-check context).</p>
+    <img src="{kw_img}" alt="Top keywords chart"/>
+    <pre>{kw_block}</pre>
   </div>
 
   <div class="card">
@@ -483,3 +505,4 @@ def save_top_features_chart(*args, **kwargs):
 
 def export_scores(*args, **kwargs):
     return export_risk_scores(*args, **kwargs)
+
