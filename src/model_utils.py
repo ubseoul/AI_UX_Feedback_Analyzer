@@ -298,7 +298,29 @@ def render_html(
     seg_chart_path: str,
     top_feats_chart_path: str,
     out_path: str = "report/report.html",
-) -> str:
+)
+
+def export_risk_scores(df_scored: pd.DataFrame, out_path: str = "report/risk_scores.csv") -> str:
+    """
+    Export a compact CSV with user_id, feature_used, nps, sus, comment, churned, predicted_risk.
+    Returns the path written. Creates folders if needed.
+    """
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    want_cols = ["user_id", "feature_used", "nps", "sus", "comment", "churned", "predicted_risk"]
+    cols = [c for c in want_cols if c in df_scored.columns]
+
+    # Sort by highest risk for convenience
+    out = df_scored[cols].copy()
+    if "predicted_risk" in out.columns:
+        out = out.sort_values("predicted_risk", ascending=False)
+
+    # Safe, utf-8, no index
+    out.to_csv(out_path, index=False, encoding="utf-8")
+    return out_path
+
+
+-> str:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     seg_img = os.path.relpath(seg_chart_path, os.path.dirname(out_path)).replace("\\", "/")
