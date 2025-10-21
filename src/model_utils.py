@@ -315,11 +315,13 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     # If text was dropped, don't pretend we have meaningful word weights
     top_feats = _top_positive_features(coefs, feat_names, k=15) if using_text else []
 
+       # --- ALSO provide just the keyword strings for legacy UIs ---
+    top_keywords = [name for name, _w in top_feats]
     # --- Save charts ---
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
     top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
-    return {
+   return {
         "auc": auc,
         "report": report_txt,
         "df_scored": df_scored,
@@ -329,12 +331,12 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         "top_feats_chart_path": top_feats_chart_path,
 
         # features / segments
-        "top_features": top_feats,
-        "top_feats": top_feats,          # <-- alias for older app.py
+        "top_features": top_feats,          # [(keyword, weight), ...]
+        "top_feats": top_feats,             # alias
+        "top_keywords": top_keywords,       # ["keyword", ...]  <-- NEW
         "seg_series": seg_series,
-        "seg": seg_series,               # <-- alias for older app.py
+        "seg": seg_series,                  # alias
     }
-
 
 # -----------------------------
 # HTML report writer
