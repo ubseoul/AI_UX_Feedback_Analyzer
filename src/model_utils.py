@@ -49,12 +49,13 @@ def quality_checks(df: pd.DataFrame) -> List[str]:
     if n < 200:
         msgs.append(f"• Small sample (n={n}). Treat results as directional until n≥200.")
 
-    if "comment" in df.columns and len(df) > 0:
+    if "comment" in df.columns and n > 0:
         short_ratio = df["comment"].astype(str).str.len().lt(5).mean()
-        if short_ratio > 0.5:
-            msgs.append("• Many very short comments; text signals may be weak.")
+        empty_ratio = df["comment"].astype(str).str.strip().eq("").mean()
+        if short_ratio > 0.5 or empty_ratio > 0.5:
+            msgs.append("• Most comments are empty/very short; text signals may be weak.")
 
-    if "churned" in df.columns and len(df) > 0:
+    if "churned" in df.columns and n > 0:
         pos = pd.to_numeric(df["churned"], errors="coerce").fillna(0).astype(int).sum()
         if pos == 0 or pos == n:
             msgs.append("• churned has only one class; AUC cannot be computed.")
@@ -184,7 +185,7 @@ def _build_pipeline(min_df: int = 1, ngram_range=(1, 2)):
                 min_df=min_df,
                 lowercase=True,
                 strip_accents="unicode",
-                token_pattern=r"(?u)\b\w+\b"  # keep short words/numbers
+                token_pattern=r"(?u)\b\w+\b"
             ), "comment"),
             ("seg", OneHotEncoder(handle_unknown="ignore"), ["feature_used"]),
             ("num", "passthrough", ["nps", "sus"]),
@@ -200,12 +201,10 @@ def _build_pipeline(min_df: int = 1, ngram_range=(1, 2)):
     )
     return preprocess, model
 
-
 def _get_feature_names(preprocess: ColumnTransformer) -> List[str]:
     try:
         return preprocess.get_feature_names_out().tolist()
     except Exception:
-        # fallback length is harmless; names are just labels
         return [f"f{i}" for i in range(1, 5001)] + ["seg_*", "nps", "sus"]
 
 def _top_positive_features(coef: np.ndarray, feat_names: List[str], k: int = 15) -> List[Tuple[str, float]]:
@@ -233,17 +232,17 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     X_cols = ["comment", "feature_used", "nps", "sus"]
     using_text = True
 
-    # 1) Build forgiving pipeline and try fit
+    # Build forgiving pipeline and try fit
     preprocess, model = _build_pipeline(min_df=1, ngram_range=(1, 2))
     try:
         X_proc = preprocess.fit_transform(df[X_cols])
     except ValueError:
-        # 2) Try simpler unigrams only
+        # Try simpler unigrams only
         try:
             preprocess, model = _build_pipeline(min_df=1, ngram_range=(1, 1))
             X_proc = preprocess.fit_transform(df[X_cols])
         except ValueError:
-            # 3) Final fallback: drop text entirely
+            # Final fallback: drop text entirely
             using_text = False
             X_cols = ["feature_used", "nps", "sus"]
             preprocess = ColumnTransformer(
@@ -254,7 +253,6 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
                 remainder="drop",
                 verbose_feature_names_out=False,
             )
-            # fresh model for consistency
             model = LogisticRegression(
                 solver="liblinear",
                 class_weight="balanced",
@@ -263,7 +261,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
             )
             X_proc = preprocess.fit_transform(df[X_cols])
 
-    # --- AUC via CV or in-sample fallback ---
+    # AUC via CV or in-sample fallback
     auc: Any = None
     report_txt = "CV used — classification report not computed per fold."
     if len(np.unique(y)) >= 2:
@@ -275,7 +273,6 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
             except Exception:
                 auc = None
         else:
-            # train once and compute in-sample metrics (directional)
             model.fit(X_proc, y)
             p = model.predict_proba(X_proc)[:, 1]
             try:
@@ -292,19 +289,20 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     if not hasattr(model, "classes_"):
         model.fit(X_proc, y)
 
-    # --- Score full dataset ---
+    # Score full dataset
     probs = model.predict_proba(X_proc)[:, 1]
     df_scored = df.copy()
     df_scored["predicted_risk"] = probs
 
-    # --- Segment series for chart ---
+    # Segment series for chart
     seg_series = (
         df_scored.groupby("feature_used", dropna=False)["predicted_risk"]
         .mean()
         .sort_values(ascending=True)
     )
 
-   feat_names = _get_feature_names(preprocess)
+    # Top features from coefficients
+    feat_names = _get_feature_names(preprocess)
     try:
         model.fit(X_proc, y)
         coefs = model.coef_
@@ -315,7 +313,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     top_feats = _top_positive_features(coefs, feat_names, k=15) if using_text else []
     top_keywords = [name for name, _w in top_feats]
 
-    # --- Save charts ---
+    # Save charts
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
     top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
