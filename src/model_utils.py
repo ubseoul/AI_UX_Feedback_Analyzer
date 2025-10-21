@@ -49,8 +49,9 @@ def quality_checks(df: pd.DataFrame) -> List[str]:
         msgs.append(f"• Small sample (n={n}). Treat results as directional until n≥200.")
 
     if "comment" in df.columns and n > 0:
-        short_ratio = df["comment"].astype(str).str.len().lt(5).mean()
-        empty_ratio = df["comment"].astype(str).str.strip().eq("").mean()
+        s = df["comment"].astype(str)
+        short_ratio = s.str.len().lt(5).mean()
+        empty_ratio = s.str.strip().eq("").mean()
         if short_ratio > 0.5 or empty_ratio > 0.5:
             msgs.append("• Most comments are empty/very short; text signals may be weak.")
 
@@ -295,8 +296,11 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     except Exception:
         coefs = np.zeros((1, len(feat_names)))
 
-    top_feats = _top_positive_features(coefs, feat_names, k=15) if using_text else []
-    top_keywords = [name for name, _w in top_feats]
+    top_feats: List[Tuple[str, float]] = _top_positive_features(coefs, feat_names, k=15) if using_text else []
+    # Return keywords in the exact shape the UI expects: [(token, weight), ...]
+    top_keywords: List[Tuple[str, float]] = list(top_feats)
+    # (Optional) string-only alias if needed elsewhere
+    top_keyword_strings: List[str] = [name for name, _w in top_feats]
 
     # Save charts
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
@@ -317,7 +321,8 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         # features / segments
         "top_features": top_feats,
         "top_feats": top_feats,          # alias
-        "top_keywords": top_keywords,
+        "top_keywords": top_keywords,    # list of (token, weight)
+        "top_keyword_strings": top_keyword_strings,  # list of token strings
         "seg_series": seg_series,
         "seg": seg_series,               # alias
     }
@@ -453,3 +458,4 @@ def save_top_features_chart(*args, **kwargs):
 
 def export_scores(*args, **kwargs):
     return export_risk_scores(*args, **kwargs)
+
