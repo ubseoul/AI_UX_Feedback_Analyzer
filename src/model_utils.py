@@ -14,7 +14,10 @@ from sklearn.metrics import roc_auc_score, classification_report
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.preprocessing import OneHotEncoder
 
-# Public schema constant
+
+# -----------------------------
+# Public schema constant & exports
+# -----------------------------
 REQUIRED_COLS = [
     "user_id", "timestamp", "nps", "sus", "feature_used", "churned", "comment"
 ]
@@ -27,13 +30,14 @@ __all__ = [
     "save_chart",
     "save_chart_segment",
     "save_chart_top_features",
-    "save_chart_top_feats",   # alias
+    "save_chart_top_feats",       # alias
     "render_html",
     "export_risk_scores",
-    "save_segment_chart",     # alias
-    "save_top_features_chart",# alias
-    "export_scores",          # alias
+    "save_segment_chart",         # alias
+    "save_top_features_chart",    # alias
+    "export_scores",              # alias
 ]
+
 
 # -----------------------------
 # Quality checks
@@ -61,6 +65,7 @@ def quality_checks(df: pd.DataFrame) -> List[str]:
             msgs.append("• churned has only one class; AUC cannot be computed.")
 
     return msgs
+
 
 # -----------------------------
 # Cleaning & coercion
@@ -123,6 +128,7 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
 # -----------------------------
 # Plot saving helpers
 # -----------------------------
@@ -133,6 +139,7 @@ def save_chart(fig: plt.Figure, path: str) -> str:
     plt.close(fig)
     return path
 
+
 def save_chart_segment(seg_series: pd.Series, path: str) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(seg_series) + 2))))
@@ -141,6 +148,7 @@ def save_chart_segment(seg_series: pd.Series, path: str) -> str:
     plt.ylabel("Segment (feature_used)")
     plt.title("Risk by segment")
     return save_chart(fig, path)
+
 
 def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -156,9 +164,11 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) ->
     plt.gca().invert_yaxis()
     return save_chart(fig, path)
 
+
 # Back-compat alias used by some app.py versions
 def save_chart_top_feats(top_features, path: str) -> str:
     return save_chart_top_features(top_features, path)
+
 
 # -----------------------------
 # Core model pipeline
@@ -188,17 +198,20 @@ def _build_pipeline(min_df: int = 1, ngram_range=(1, 2)):
     )
     return preprocess, model
 
+
 def _get_feature_names(preprocess: ColumnTransformer) -> List[str]:
     try:
         return preprocess.get_feature_names_out().tolist()
     except Exception:
         return [f"f{i}" for i in range(1, 5001)] + ["seg_*", "nps", "sus"]
 
+
 def _top_positive_features(coef: np.ndarray, feat_names: List[str], k: int = 15) -> List[Tuple[str, float]]:
     weights = coef.flatten()
     order = np.argsort(weights)[::-1]
     sel = [(feat_names[i] if i < len(feat_names) else f"f{i}", float(weights[i])) for i in order[:k]]
     return [(n, w) for (n, w) in sel if w > 0]
+
 
 def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     """
@@ -208,7 +221,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
       2) Fallback: TF-IDF (uni only, min_df=1)
       3) Final fallback: drop text; use only segment + NPS + SUS
     Returns dict with AUC, classification report (if no CV), scored df,
-    top features (empty if text dropped), segment series, and chart paths.
+    top features, segment series, and chart paths.
     """
     df = clean_df(df)
 
@@ -297,10 +310,15 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         coefs = np.zeros((1, len(feat_names)))
 
     top_feats: List[Tuple[str, float]] = _top_positive_features(coefs, feat_names, k=15) if using_text else []
-    # Return keywords in the exact shape the UI expects: [(token, weight), ...]
-    top_keywords: List[Tuple[str, float]] = list(top_feats)
-    # (Optional) string-only alias if needed elsewhere
-    top_keyword_strings: List[str] = [name for name, _w in top_feats]
+    # *** CRITICAL FIX: ensure top_keywords is ALWAYS list[(token, weight)] ***
+    if top_feats:
+        top_keywords: List[Tuple[str, float]] = list(top_feats)
+    else:
+        # still return a 2D shape to satisfy DataFrame with 2 columns
+        top_keywords = [("no_keywords_available", 0.0)]
+
+    # Optional string-only alias if used elsewhere
+    top_keyword_strings: List[str] = [name for name, _w in top_feats] if top_feats else ["no_keywords_available"]
 
     # Save charts
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
@@ -321,11 +339,12 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         # features / segments
         "top_features": top_feats,
         "top_feats": top_feats,          # alias
-        "top_keywords": top_keywords,    # list of (token, weight)
-        "top_keyword_strings": top_keyword_strings,  # list of token strings
+        "top_keywords": top_keywords,    # ALWAYS [(token, weight)]
+        "top_keyword_strings": top_keyword_strings,
         "seg_series": seg_series,
         "seg": seg_series,               # alias
     }
+
 
 # -----------------------------
 # HTML report writer
@@ -357,7 +376,7 @@ def render_html(
             text = text[:137] + "..."
         sample_quotes.append(f'{uid} ({seg}) — risk {risk:.2f}: “{text}”')
 
-    tf_block = "\n".join([f"- {n}: {w:.3f}" for n, w in top_features[:12]])
+    tf_block = "\n".join([f"- {n}: {w:.3f}" for n, w in top_features[:12]]) if top_features else "- No text-based signals available."
     seg_tbl = "\n".join([f"<tr><td>{k}</td><td>{v:.3f}</td></tr>" for k, v in seg_series.items()])
 
     auc_text = "N/A"
@@ -436,6 +455,7 @@ def render_html(
         f.write(html)
     return out_path
 
+
 # -----------------------------
 # CSV export of scores
 # -----------------------------
@@ -449,6 +469,7 @@ def export_risk_scores(df_scored: pd.DataFrame, out_path: str = "report/risk_sco
     out.to_csv(out_path, index=False, encoding="utf-8")
     return out_path
 
+
 # ---- Legacy compatibility shims ----
 def save_segment_chart(*args, **kwargs):
     return save_chart_segment(*args, **kwargs)
@@ -458,4 +479,3 @@ def save_top_features_chart(*args, **kwargs):
 
 def export_scores(*args, **kwargs):
     return export_risk_scores(*args, **kwargs)
-
