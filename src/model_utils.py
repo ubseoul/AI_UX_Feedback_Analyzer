@@ -30,7 +30,7 @@ __all__ = [
     "save_chart",
     "save_chart_segment",
     "save_chart_top_features",
-    "save_chart_top_feats",       # alias
+    "save_chart_top_feats",       # alias with kwargs support
     "render_html",
     "export_risk_scores",
     "save_segment_chart",         # alias
@@ -140,17 +140,20 @@ def save_chart(fig: plt.Figure, path: str) -> str:
     return path
 
 
-def save_chart_segment(seg_series: pd.Series, path: str) -> str:
+def save_chart_segment(seg_series: pd.Series, path: str, *, title: str = "Risk by segment",
+                       xlabel: str = "Avg predicted risk (0–1)") -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(seg_series) + 2))))
     seg_series.sort_values(ascending=True).plot(kind="barh")
-    plt.xlabel("Avg predicted risk (0–1)")
+    plt.xlabel(xlabel)
     plt.ylabel("Segment (feature_used)")
-    plt.title("Risk by segment")
+    plt.title(title)
     return save_chart(fig, path)
 
 
-def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) -> str:
+def save_chart_top_features(top_features: List[Tuple[str, float]], path: str, *,
+                            title: str = "Top risk signals (positive coefficients)",
+                            xlabel: str = "Model weight (higher → more risk)") -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not top_features:
         top_features = [("No strong positive signals", 0.0)]
@@ -159,15 +162,19 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) ->
     fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(names) + 2))))
     plt.barh(y_pos, weights)
     plt.yticks(y_pos, names)
-    plt.xlabel("Model weight (higher → more risk)")
-    plt.title("Top risk signals (positive coefficients)")
+    plt.xlabel(xlabel)
+    plt.title(title)
     plt.gca().invert_yaxis()
     return save_chart(fig, path)
 
 
-# Back-compat alias used by some app.py versions
-def save_chart_top_feats(top_features, path: str) -> str:
-    return save_chart_top_features(top_features, path)
+# Back-compat alias used by some app.py versions — now accepts kwargs
+def save_chart_top_feats(top_features, path: str, **kwargs) -> str:
+    """
+    Wrapper to maintain compatibility with app.py calls like:
+      save_chart_top_feats(top_feats, feats_chart_path, title="...", xlabel="...")
+    """
+    return save_chart_top_features(top_features, path, **kwargs)
 
 
 # -----------------------------
@@ -310,19 +317,16 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         coefs = np.zeros((1, len(feat_names)))
 
     top_feats: List[Tuple[str, float]] = _top_positive_features(coefs, feat_names, k=15) if using_text else []
-    # *** CRITICAL FIX: ensure top_keywords is ALWAYS list[(token, weight)] ***
-    if top_feats:
-        top_keywords: List[Tuple[str, float]] = list(top_feats)
-    else:
-        # still return a 2D shape to satisfy DataFrame with 2 columns
-        top_keywords = [("no_keywords_available", 0.0)]
-
-    # Optional string-only alias if used elsewhere
+    # Always return (token, weight) tuples for your DataFrame call
+    top_keywords: List[Tuple[str, float]] = list(top_feats) if top_feats else [("no_keywords_available", 0.0)]
     top_keyword_strings: List[str] = [name for name, _w in top_feats] if top_feats else ["no_keywords_available"]
 
     # Save charts
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
-    top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
+    top_feats_chart_path = save_chart_top_features(
+        top_feats, "charts/top_features.png",
+        title="Top Risk Signals", xlabel="Coefficient (higher = more churn risk)"
+    )
 
     return {
         "auc": auc,
