@@ -27,6 +27,19 @@ REQUIRED_COLS = [
     "comment",       # free text
 ]
 
+# ---- Exported names (put this here) ----
+__all__ = [
+    "REQUIRED_COLS",
+    "quality_checks",
+    "clean_df",
+    "fit_and_score",
+    "save_chart",
+    "save_chart_segment",
+    "save_chart_top_features",
+    "save_chart_top_feats",   # alias for backward-compat with app.py
+    "render_html",
+]
+
 # Optional explicit export list
 __all__ = [
     "REQUIRED_COLS",
@@ -162,6 +175,10 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) ->
     plt.title("Top risk signals (positive coefficients)")
     plt.gca().invert_yaxis()
     return save_chart(fig, path)
+
+# Backward-compat alias to match app.py import
+def save_chart_top_feats(top_features, path: str) -> str:
+    return save_chart_top_features(top_features, path)
 
 # -----------------------------
 # Core fit, score, features
