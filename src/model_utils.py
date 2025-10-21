@@ -14,20 +14,12 @@ from sklearn.metrics import roc_auc_score, classification_report
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.preprocessing import OneHotEncoder
 
-# -----------------------------
-# Required schema (display + checks)
-# -----------------------------
+# ---- Public schema constant ----
 REQUIRED_COLS = [
-    "user_id",       # unique row/user id
-    "timestamp",     # ISO date or datetime
-    "nps",           # 0..10
-    "sus",           # 0..100
-    "feature_used",  # segment/group/category
-    "churned",       # 0/1 (or inferred)
-    "comment",       # free text
+    "user_id", "timestamp", "nps", "sus", "feature_used", "churned", "comment"
 ]
 
-# ---- Exported names (put this here) ----
+# ---- Exported names ----
 __all__ = [
     "REQUIRED_COLS",
     "quality_checks",
@@ -36,27 +28,19 @@ __all__ = [
     "save_chart",
     "save_chart_segment",
     "save_chart_top_features",
-    "save_chart_top_feats",   # alias for backward-compat with app.py
+    "save_chart_top_feats",   # alias for backward-compat
     "render_html",
-]
-
-# Optional explicit export list
-__all__ = [
-    "REQUIRED_COLS",
-    "quality_checks",
-    "clean_df",
-    "fit_and_score",
-    "save_chart",
-    "save_chart_segment",
-    "save_chart_top_features",
-    "render_html",
+    "export_risk_scores",
+    "save_segment_chart",     # legacy alias
+    "save_top_features_chart",# legacy alias
+    "export_scores",          # legacy alias
 ]
 
 # -----------------------------
-# Light quality checks (messages for UI)
+# Quality checks
 # -----------------------------
 def quality_checks(df: pd.DataFrame) -> List[str]:
-    msgs = []
+    msgs: List[str] = []
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
         msgs.append(f"• Missing required columns: {', '.join(missing)}")
@@ -64,17 +48,21 @@ def quality_checks(df: pd.DataFrame) -> List[str]:
     n = len(df)
     if n < 200:
         msgs.append(f"• Small sample (n={n}). Treat results as directional until n≥200.")
+
     if "comment" in df.columns and len(df) > 0:
-        if df["comment"].astype(str).str.len().lt(5).mean() > 0.5:
+        short_ratio = df["comment"].astype(str).str.len().lt(5).mean()
+        if short_ratio > 0.5:
             msgs.append("• Many very short comments; text signals may be weak.")
+
     if "churned" in df.columns and len(df) > 0:
         pos = pd.to_numeric(df["churned"], errors="coerce").fillna(0).astype(int).sum()
         if pos == 0 or pos == n:
             msgs.append("• churned has only one class; AUC cannot be computed.")
+
     return msgs
 
 # -----------------------------
-# Cleaning & coercion with safe defaults
+# Cleaning & coercion
 # -----------------------------
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -150,7 +138,6 @@ def save_chart(fig: plt.Figure, path: str) -> str:
     plt.close(fig)
     return path
 
-# NEW: explicit chart helpers to match app.py imports
 def save_chart_segment(seg_series: pd.Series, path: str) -> str:
     """Create and save the 'risk by segment' horizontal bar chart."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -176,15 +163,12 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) ->
     plt.gca().invert_yaxis()
     return save_chart(fig, path)
 
-def save_chart_top_feats(top_features, path: str) -> str:
-    return save_chart_top_features(top_features, path)
-
-# Backward-compat alias to match app.py import
+# Backward-compat alias (some app.py versions import this)
 def save_chart_top_feats(top_features, path: str) -> str:
     return save_chart_top_features(top_features, path)
 
 # -----------------------------
-# Core fit, score, features
+# Core model pipeline
 # -----------------------------
 def _build_pipeline():
     preprocess = ColumnTransformer(
@@ -208,6 +192,7 @@ def _get_feature_names(preprocess: ColumnTransformer) -> List[str]:
     try:
         return preprocess.get_feature_names_out().tolist()
     except Exception:
+        # fallback length is harmless; names are just labels
         return [f"f{i}" for i in range(1, 5001)] + ["seg_*", "nps", "sus"]
 
 def _top_positive_features(coef: np.ndarray, feat_names: List[str], k: int = 15) -> List[Tuple[str, float]]:
@@ -217,6 +202,11 @@ def _top_positive_features(coef: np.ndarray, feat_names: List[str], k: int = 15)
     return [(n, w) for (n, w) in sel if w > 0]
 
 def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
+    """
+    Train LR on TF-IDF(text)+one-hot(segment)+numeric(NPS,SUS).
+    Returns dict with AUC, classification report (if no CV), scored df,
+    top features, segment series, and chart paths.
+    """
     df = clean_df(df)
 
     X_cols = ["comment", "feature_used", "nps", "sus"]
@@ -226,7 +216,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     X_proc = preprocess.fit_transform(df[X_cols])
 
     # AUC via CV or in-sample fallback
-    auc = None
+    auc: Any = None
     report_txt = "CV used — classification report not computed per fold."
     if len(np.unique(y)) >= 2:
         if use_cv and len(df) >= 40:
@@ -249,9 +239,11 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    # Ensure fitted for downstream ops
     if not hasattr(model, "classes_"):
         model.fit(X_proc, y)
 
+    # Score full dataset
     probs = model.predict_proba(X_proc)[:, 1]
     df_scored = df.copy()
     df_scored["predicted_risk"] = probs
@@ -263,7 +255,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         .sort_values(ascending=True)
     )
 
-    # Top features
+    # Top features from coefficients
     feat_names = _get_feature_names(preprocess)
     try:
         model.fit(X_proc, y)
@@ -272,7 +264,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         coefs = np.zeros((1, len(feat_names)))
     top_feats = _top_positive_features(coefs, feat_names, k=15)
 
-    # Save charts via the new explicit helpers
+    # Save charts
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
     top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
@@ -287,7 +279,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
     }
 
 # -----------------------------
-# Simple HTML report writer
+# HTML report writer
 # -----------------------------
 def render_html(
     df_scored: pd.DataFrame,
@@ -298,36 +290,14 @@ def render_html(
     seg_chart_path: str,
     top_feats_chart_path: str,
     out_path: str = "report/report.html",
-)
-
-def export_risk_scores(df_scored: pd.DataFrame, out_path: str = "report/risk_scores.csv") -> str:
-    """
-    Export a compact CSV with user_id, feature_used, nps, sus, comment, churned, predicted_risk.
-    Returns the path written. Creates folders if needed.
-    """
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
-    want_cols = ["user_id", "feature_used", "nps", "sus", "comment", "churned", "predicted_risk"]
-    cols = [c for c in want_cols if c in df_scored.columns]
-
-    # Sort by highest risk for convenience
-    out = df_scored[cols].copy()
-    if "predicted_risk" in out.columns:
-        out = out.sort_values("predicted_risk", ascending=False)
-
-    # Safe, utf-8, no index
-    out.to_csv(out_path, index=False, encoding="utf-8")
-    return out_path
-
-
--> str:
+) -> str:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     seg_img = os.path.relpath(seg_chart_path, os.path.dirname(out_path)).replace("\\", "/")
     feat_img = os.path.relpath(top_feats_chart_path, os.path.dirname(out_path)).replace("\\", "/")
 
     # Top quotes for high-risk users
-    sample_quotes = []
+    sample_quotes: List[str] = []
     high = df_scored.sort_values("predicted_risk", ascending=False).head(8)
     for _, r in high.iterrows():
         uid = str(r.get("user_id", "id"))
@@ -413,7 +383,36 @@ def export_risk_scores(df_scored: pd.DataFrame, out_path: str = "report/risk_sco
 </body>
 </html>"""
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     return out_path
+
+# -----------------------------
+# CSV export of scores
+# -----------------------------
+def export_risk_scores(df_scored: pd.DataFrame, out_path: str = "report/risk_scores.csv") -> str:
+    """
+    Export a compact CSV with user_id, feature_used, nps, sus, comment, churned, predicted_risk.
+    Returns the path written. Creates folders if needed.
+    """
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    want_cols = ["user_id", "feature_used", "nps", "sus", "comment", "churned", "predicted_risk"]
+    cols = [c for c in want_cols if c in df_scored.columns]
+
+    out = df_scored[cols].copy()
+    if "predicted_risk" in out.columns:
+        out = out.sort_values("predicted_risk", ascending=False)
+
+    out.to_csv(out_path, index=False, encoding="utf-8")
+    return out_path
+
+# ---- Legacy compatibility shims ----
+def save_segment_chart(*args, **kwargs):
+    return save_chart_segment(*args, **kwargs)
+
+def save_top_features_chart(*args, **kwargs):
+    return save_chart_top_features(*args, **kwargs)
+
+def export_scores(*args, **kwargs):
+    return export_risk_scores(*args, **kwargs)
