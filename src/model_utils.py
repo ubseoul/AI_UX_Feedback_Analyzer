@@ -304,8 +304,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         .sort_values(ascending=True)
     )
 
-    # --- Top features from coefficients ---
-    feat_names = _get_feature_names(preprocess)
+   feat_names = _get_feature_names(preprocess)
     try:
         model.fit(X_proc, y)
         coefs = model.coef_
@@ -314,14 +313,13 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
 
     # If text was dropped, don't pretend we have meaningful word weights
     top_feats = _top_positive_features(coefs, feat_names, k=15) if using_text else []
-
-       # --- ALSO provide just the keyword strings for legacy UIs ---
     top_keywords = [name for name, _w in top_feats]
+
     # --- Save charts ---
     seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
     top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
-   return {
+    return {
         "auc": auc,
         "report": report_txt,
         "df_scored": df_scored,
@@ -332,10 +330,10 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
 
         # features / segments
         "top_features": top_feats,          # [(keyword, weight), ...]
-        "top_feats": top_feats,             # alias
-        "top_keywords": top_keywords,       # ["keyword", ...]  <-- NEW
+        "top_feats": top_feats,             # alias for legacy code
+        "top_keywords": top_keywords,       # ["keyword", ...]
         "seg_series": seg_series,
-        "seg": seg_series,                  # alias
+        "seg": seg_series,                  # alias for legacy code
     }
 
 # -----------------------------
