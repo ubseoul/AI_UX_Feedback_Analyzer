@@ -1,7 +1,6 @@
 # src/model_utils.py
 import os
 from datetime import datetime
-from io import StringIO
 from typing import List, Tuple, Dict, Any
 
 import numpy as np
@@ -28,6 +27,18 @@ REQUIRED_COLS = [
     "comment",       # free text
 ]
 
+# Optional explicit export list
+__all__ = [
+    "REQUIRED_COLS",
+    "quality_checks",
+    "clean_df",
+    "fit_and_score",
+    "save_chart",
+    "save_chart_segment",
+    "save_chart_top_features",
+    "render_html",
+]
+
 # -----------------------------
 # Light quality checks (messages for UI)
 # -----------------------------
@@ -40,9 +51,10 @@ def quality_checks(df: pd.DataFrame) -> List[str]:
     n = len(df)
     if n < 200:
         msgs.append(f"• Small sample (n={n}). Treat results as directional until n≥200.")
-    if df.get("comment", pd.Series([], dtype=str)).astype(str).str.len().lt(5).mean() > 0.5:
-        msgs.append("• Many very short comments; text signals may be weak.")
-    if "churned" in df.columns:
+    if "comment" in df.columns and len(df) > 0:
+        if df["comment"].astype(str).str.len().lt(5).mean() > 0.5:
+            msgs.append("• Many very short comments; text signals may be weak.")
+    if "churned" in df.columns and len(df) > 0:
         pos = pd.to_numeric(df["churned"], errors="coerce").fillna(0).astype(int).sum()
         if pos == 0 or pos == n:
             msgs.append("• churned has only one class; AUC cannot be computed.")
@@ -103,7 +115,6 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
         elif "rating" in df.columns:
             df["churned"] = (pd.to_numeric(df["rating"], errors="coerce") <= 2).astype(int)
         else:
-            # default to 0 if no signal exists
             df["churned"] = 0
 
     # user_id
@@ -112,8 +123,7 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
 
     # timestamp
     if "timestamp" not in df.columns:
-        today = datetime.utcnow().date().isoformat()
-        df["timestamp"] = pd.Series([today] * len(df), index=df.index)
+        df["timestamp"] = pd.Timestamp.utcnow().date().isoformat()
 
     return df
 
@@ -127,17 +137,39 @@ def save_chart(fig: plt.Figure, path: str) -> str:
     plt.close(fig)
     return path
 
+# NEW: explicit chart helpers to match app.py imports
+def save_chart_segment(seg_series: pd.Series, path: str) -> str:
+    """Create and save the 'risk by segment' horizontal bar chart."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(seg_series) + 2))))
+    seg_series.sort_values(ascending=True).plot(kind="barh")
+    plt.xlabel("Avg predicted risk (0–1)")
+    plt.ylabel("Segment (feature_used)")
+    plt.title("Risk by segment")
+    return save_chart(fig, path)
+
+def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) -> str:
+    """Create and save the 'top risk signals' horizontal bar chart."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not top_features:
+        top_features = [("No strong positive signals", 0.0)]
+    names, weights = zip(*top_features)
+    y_pos = np.arange(len(names))
+    fig = plt.figure(figsize=(7, max(2.5, 0.35 * (len(names) + 2))))
+    plt.barh(y_pos, weights)
+    plt.yticks(y_pos, names)
+    plt.xlabel("Model weight (higher → more risk)")
+    plt.title("Top risk signals (positive coefficients)")
+    plt.gca().invert_yaxis()
+    return save_chart(fig, path)
+
 # -----------------------------
-# Core fit, score, charts, feature importances
+# Core fit, score, features
 # -----------------------------
-def _build_pipeline() -> Tuple[ColumnTransformer, LogisticRegression]:
+def _build_pipeline():
     preprocess = ColumnTransformer(
         transformers=[
-            ("text", TfidfVectorizer(
-                max_features=5000,
-                ngram_range=(1, 2),
-                min_df=2
-            ), "comment"),
+            ("text", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2), "comment"),
             ("seg", OneHotEncoder(handle_unknown="ignore"), ["feature_used"]),
             ("num", "passthrough", ["nps", "sus"]),
         ],
@@ -145,7 +177,7 @@ def _build_pipeline() -> Tuple[ColumnTransformer, LogisticRegression]:
         verbose_feature_names_out=False,
     )
     model = LogisticRegression(
-        solver="liblinear",  # stable on small datasets
+        solver="liblinear",
         class_weight="balanced",
         max_iter=200,
         random_state=42,
@@ -156,55 +188,35 @@ def _get_feature_names(preprocess: ColumnTransformer) -> List[str]:
     try:
         return preprocess.get_feature_names_out().tolist()
     except Exception:
-        # Fallback names
-        names = []
-        names += [f"t:{i}" for i in range(5000)]
-        names += ["seg_*"]
-        names += ["nps", "sus"]
-        return names
+        return [f"f{i}" for i in range(1, 5001)] + ["seg_*", "nps", "sus"]
 
 def _top_positive_features(coef: np.ndarray, feat_names: List[str], k: int = 15) -> List[Tuple[str, float]]:
     weights = coef.flatten()
     order = np.argsort(weights)[::-1]
     sel = [(feat_names[i] if i < len(feat_names) else f"f{i}", float(weights[i])) for i in order[:k]]
-    # Keep only positive weights
     return [(n, w) for (n, w) in sel if w > 0]
 
 def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
-    """
-    Train LR on TF-IDF(text)+one-hot(segment)+numeric(NPS,SUS).
-    Returns dict with AUC, classification report (if no CV), scored df, top features, and chart paths.
-    """
     df = clean_df(df)
 
     X_cols = ["comment", "feature_used", "nps", "sus"]
     y = df["churned"].astype(int).values
 
     preprocess, model = _build_pipeline()
-    # Fit once on full data to get feature names + coefficients later
-    X_for_fit = df[X_cols]
-    try:
-        X_proc = preprocess.fit_transform(X_for_fit)
-    except Exception as e:
-        raise RuntimeError(f"Preprocessing failed: {e}")
+    X_proc = preprocess.fit_transform(df[X_cols])
 
-    # AUC via CV (recommended) or simple hold-in AUC if both classes exist
+    # AUC via CV or in-sample fallback
     auc = None
     report_txt = "CV used — classification report not computed per fold."
-    if len(np.unique(y)) < 2:
-        auc = None
-    else:
+    if len(np.unique(y)) >= 2:
         if use_cv and len(df) >= 40:
             cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
             try:
-                aucs = cross_val_score(
-                    model, X_proc, y, cv=cv, scoring="roc_auc", n_jobs=None
-                )
+                aucs = cross_val_score(model, X_proc, y, cv=cv, scoring="roc_auc")
                 auc = float(np.mean(aucs))
             except Exception:
                 auc = None
         else:
-            # Fit and compute "in-sample" AUC and a quick report
             model.fit(X_proc, y)
             p = model.predict_proba(X_proc)[:, 1]
             try:
@@ -217,54 +229,32 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # Ensure we have a fitted model for scoring
     if not hasattr(model, "classes_"):
         model.fit(X_proc, y)
 
-    # Score full dataset
     probs = model.predict_proba(X_proc)[:, 1]
     df_scored = df.copy()
     df_scored["predicted_risk"] = probs
 
-    # Charts
-    os.makedirs("charts", exist_ok=True)
-    # Risk by segment
-    seg = (
+    # Segment series for chart
+    seg_series = (
         df_scored.groupby("feature_used", dropna=False)["predicted_risk"]
         .mean()
         .sort_values(ascending=True)
     )
 
-    fig1 = plt.figure(figsize=(7, max(2.5, 0.35 * (len(seg) + 2))))
-    seg.plot(kind="barh")
-    plt.xlabel("Avg predicted risk (0–1)")
-    plt.ylabel("Segment (feature_used)")
-    plt.title("Risk by segment")
-    seg_chart_path = save_chart(fig1, "charts/segment_risk.png")
-
-    # Top positive features (signals)
+    # Top features
     feat_names = _get_feature_names(preprocess)
     try:
-        # Refit on full data to align with feature space we transformed
         model.fit(X_proc, y)
         coefs = model.coef_
     except Exception:
         coefs = np.zeros((1, len(feat_names)))
-
     top_feats = _top_positive_features(coefs, feat_names, k=15)
 
-    # Plot top features
-    if len(top_feats) == 0:
-        top_feats = [("No strong positive signals", 0.0)]
-    names, weights = zip(*top_feats)
-    fig2 = plt.figure(figsize=(7, max(2.5, 0.35 * (len(names) + 2))))
-    y_pos = np.arange(len(names))
-    plt.barh(y_pos, weights)
-    plt.yticks(y_pos, names)
-    plt.xlabel("Model weight (higher → more risk)")
-    plt.title("Top risk signals (positive coefficients)")
-    plt.gca().invert_yaxis()
-    top_feats_chart_path = save_chart(fig2, "charts/top_features.png")
+    # Save charts via the new explicit helpers
+    seg_chart_path = save_chart_segment(seg_series, "charts/segment_risk.png")
+    top_feats_chart_path = save_chart_top_features(top_feats, "charts/top_features.png")
 
     return {
         "auc": auc,
@@ -273,7 +263,7 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         "seg_chart_path": seg_chart_path,
         "top_feats_chart_path": top_feats_chart_path,
         "top_features": top_feats,
-        "seg_series": seg,
+        "seg_series": seg_series,
     }
 
 # -----------------------------
@@ -291,7 +281,6 @@ def render_html(
 ) -> str:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    # Safe paths for HTML (forward slashes)
     seg_img = os.path.relpath(seg_chart_path, os.path.dirname(out_path)).replace("\\", "/")
     feat_img = os.path.relpath(top_feats_chart_path, os.path.dirname(out_path)).replace("\\", "/")
 
@@ -307,13 +296,9 @@ def render_html(
             text = text[:137] + "..."
         sample_quotes.append(f'{uid} ({seg}) — risk {risk:.2f}: “{text}”')
 
-    # Top features block
     tf_block = "\n".join([f"- {n}: {w:.3f}" for n, w in top_features[:12]])
-
-    # Segment table
     seg_tbl = "\n".join([f"<tr><td>{k}</td><td>{v:.3f}</td></tr>" for k, v in seg_series.items()])
 
-    # AUC text
     auc_text = "N/A"
     if isinstance(auc, (int, float)) and not pd.isna(auc):
         auc_text = f"{auc:.3f}"
@@ -332,11 +317,10 @@ def render_html(
  .muted {{ color:#666; font-size: 14px; }}
  .card {{ border:1px solid #eee; border-radius:12px; padding:16px; margin:16px 0; }}
  .kpi {{ font-weight:600; font-size: 18px; }}
- .grid {{ display:grid; grid-template-columns: 1fr; gap:16px; }}
  img {{ max-width: 100%; height: auto; border:1px solid #eee; border-radius:8px; }}
  table {{ border-collapse: collapse; width:100%; }}
  th,td {{ border:1px solid #eee; padding:8px; text-align:left; }}
- code {{ background:#f7f7f7; padding:2px 4px; border-radius:4px; }}
+ pre {{ white-space: pre-wrap; }}
 </style>
 </head>
 <body>
@@ -387,7 +371,7 @@ def render_html(
 </body>
 </html>"""
 
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
-
     return out_path
