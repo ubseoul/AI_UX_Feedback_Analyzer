@@ -323,10 +323,16 @@ def fit_and_score(df: pd.DataFrame, use_cv: bool = True) -> Dict[str, Any]:
         "auc": auc,
         "report": report_txt,
         "df_scored": df_scored,
+
+        # charts
         "seg_chart_path": seg_chart_path,
         "top_feats_chart_path": top_feats_chart_path,
+
+        # features / segments
         "top_features": top_feats,
+        "top_feats": top_feats,          # <-- alias for older app.py
         "seg_series": seg_series,
+        "seg": seg_series,               # <-- alias for older app.py
     }
 
 
