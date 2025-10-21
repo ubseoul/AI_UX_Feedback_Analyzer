@@ -176,6 +176,9 @@ def save_chart_top_features(top_features: List[Tuple[str, float]], path: str) ->
     plt.gca().invert_yaxis()
     return save_chart(fig, path)
 
+def save_chart_top_feats(top_features, path: str) -> str:
+    return save_chart_top_features(top_features, path)
+
 # Backward-compat alias to match app.py import
 def save_chart_top_feats(top_features, path: str) -> str:
     return save_chart_top_features(top_features, path)
